@@ -1,5 +1,6 @@
 # Dataset
-yellow_tripdata_2025-01.parquet
+data/
+temp/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
