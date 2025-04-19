@@ -1,8 +1,16 @@
 from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import Mapped
+from sqlalchemy import String
+from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import Session
+
 import psycopg2
 import pandas as pd
 import itertools
 import os
+import datetime
+from io import StringIO
 
 from src.load import exec_sql
 
@@ -12,7 +20,7 @@ if __name__=='__main__' :
 
     year = [y for y in range(2009,2026)]
     month = [m for m in range(1,13)]
-    taxi = {1:'yellow', 2:'green'}#, 3:'fhv', 4:'fhvhv'}
+    taxi = {1:'yellow', 2:'green', 3:'for_hire_vehicle', 4:'high_volume_for_hire_vehicle'}
     config = {
         'host' : 'localhost',
         'port' : 5432,
@@ -22,6 +30,133 @@ if __name__=='__main__' :
 
     engine = create_engine(f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}")
  
+    class Base(DeclarativeBase):
+        pass
+
+    class Taxi(Base):
+        __tablename__ = "taxi_list"
+
+        type_id:                Mapped[int] = mapped_column(primary_key=True)
+        taxi_type:              Mapped[str]
+
+    class Calendar(Base):
+        __tablename__ = "calendar"
+
+        calendar_entry_id:      Mapped[int] = mapped_column(primary_key=True)
+        taxi_type_id:           Mapped[int]
+        year:                   Mapped[int]
+        month:                  Mapped[int]
+
+    class Yellow(Base):
+        __tablename__ = "yellow_taxi"
+
+        TripID:                 Mapped[int] = mapped_column(primary_key=True)
+        VendorID:               Mapped[int]
+        tpep_pickup_datetime:   Mapped[datetime.datetime]
+        tpep_dropoff_datetime:  Mapped[datetime.datetime]
+        passenger_count:        Mapped[float]
+        trip_distance:          Mapped[float]                
+        RatecodeID:             Mapped[float]
+        store_and_fwd_flag:     Mapped[str]
+        PULocationID:           Mapped[int]
+        DOLocationID:           Mapped[int]
+        payment_type:           Mapped[int]
+        fare_amount:            Mapped[float]
+        extra:                  Mapped[float]
+        mta_tax:                Mapped[float]
+        tip_amount:             Mapped[float]
+        tolls_amount:           Mapped[float]
+        improvement_surcharge:  Mapped[float]
+        total_amount:           Mapped[float]
+        congestion_surcharge:   Mapped[float]
+        airport_fee:            Mapped[float]
+        calendar_entry_id:      Mapped[int]
+
+    yellow_tripdata = {}
+    
+
+    # Reset everyhing
+    Taxi.__table__.drop(engine, checkfirst=True)
+    Calendar.__table__.drop(engine, checkfirst=True)
+    Yellow.__table__.drop(engine, checkfirst=True)
+
+    Base.metadata.create_all(engine)
+
+    try :
+        conn = psycopg2.connect(**config)
+        conn.autocommit = True
+    except psycopg2.Error as e :
+        print('Error connecting to the database')
+        print(e)
+    else :
+        print('Successfully connected to database.')
+
+    with Session(engine) as session:
+
+        # Fill the taxi table
+        for t in taxi:
+            t = Taxi(
+                type_id = t,
+                taxi_type = taxi[t]
+            )
+            session.add(t)
+            session.flush()
+
+        ce_id = 1
+        for t,y,m in itertools.product(taxi,year,month): 
+
+            calendar_entry = Calendar(
+                calendar_entry_id = ce_id,
+                taxi_type_id = t,
+                year = y,
+                month = m
+            )
+            session.add(calendar_entry)
+            session.flush()
+
+            tablename = "{t}_tripdata_{y}_{m:02d}".format(t=taxi[t],y=y,m=m)
+            Yellow.__tablename__ = tablename
+            
+            pq_file = './data/{t}/{y}/{t}_tripdata_{y}-{m:02d}.parquet'.format(t=taxi[t],y=y,m=m)
+
+            if os.path.isfile(pq_file):
+                print(f"Loading {pq_file} in Pandas...")
+                df = pd.read_parquet(pq_file,engine='fastparquet')
+            else:
+                ce_id+=1
+                continue
+
+            print('Writing data to CSV')
+            fillna_dict = {'airport_fee':0.0,
+                           'passenger_count':0,
+                           'store_and_fwd_flag':'O',
+                           'ratecodeid':0.0,
+                           'congestion_surcharge':0.0}
+
+            df.fillna(value=fillna_dict,inplace=True)
+            df['RatecodeID'] = df['RatecodeID'].fillna(0.0)
+
+            #buffer = StringIO()
+            df.to_csv("./temp/temp.csv", header=False, index=False)
+            #buffer.seek(0)
+
+            print("Pushing to database")
+            cursor = conn.cursor()
+            with open('./temp/temp.csv', 'r') as csv_file :
+                cursor.copy_from(csv_file,table = '{t}_tripdata_{y}_{m:02d}'.format(t=taxi[t],y=y,m=m),sep=',',columns=[x.lower() for x in df.columns.to_list()])
+
+            print('Done')
+
+            #session.commit()
+            #quit(0)
+
+            ce_id += 1
+
+        session.commit()
+    # print(yellow_tripdata)
+        
+    quit(0)
+
     if download :
         pass
 
@@ -65,18 +200,12 @@ if __name__=='__main__' :
         exec_sql(sql,**config)
 
         pq_file = './data/{t}/{y}/{t}_tripdata_{y}-{m:02d}.parquet'.format(t=taxi[t_id],y=y,m=m)
-        # print(pq_file)
+
         if os.path.isfile(pq_file) :
             print(f'Loading {pq_file} into pandas...')
             df = pd.read_parquet(pq_file,engine='fastparquet')
             df = df.assign(calendar_entry_id = ce_id) 
-            # print(df.columns.to_list())
             
-            # print(df['calendar_entry_id'])
-            # print('Creating CSV file...')
-            # df.to_csv('./temp/temp.csv', header=False, index=False) 
-            # print('Bulk inserting into the database...')
-
             sql = """DROP TABLE IF EXISTS {t}_tripdata_{y}_{m:02d};""" .format(t=taxi[t_id],y=y,m=m)
             exec_sql(sql,**config)
     
@@ -103,21 +232,6 @@ if __name__=='__main__' :
             calendar_entry_id INT)""".format(t=taxi[t_id],y=y,m=m)
             exec_sql(sql,**config)
 
-            # WITH LINES
-            # if os.path.exists("./temp/temp.csv"):
-            #     os.remove("./temp/temp.csv")
-            # cursor = conn.cursor()
-            # for col in df.columns.to_list():
-            #     print(f'Adding {col} to the CSV...')
-                
-            #     df[col].to_csv('./temp/temp.csv', header=False, index=False, lineterminator=',', mode='a')
-            #     with open('./temp/temp.csv', 'a') as csv_file :
-            #         csv_file.write('\n')
-
-            # print('Copying the CSV to the database')
-            # with open('./temp/temp.csv', 'r') as csv_file :
-            #     cursor.copy_from(csv_file,table = '{t}_tripdata_{y}_{m:02d}'.format(t=taxi[t_id],y=y,m=m),sep=',',columns=[x.lower() for x in df.columns.to_list()])
-            # quit(0)
 
             #WITH COLUMNS
             print('Writing data to CSV')
@@ -126,10 +240,7 @@ if __name__=='__main__' :
                            'store_and_fwd_flag':'O',
                            'ratecodeid':0.0,
                            'congestion_surcharge':0.0}
-            # print(df.fillna(value=fillna_dict).loc[[6339568]].RatecodeID)
-            # quit(0)
-            # df = df.drop([6339568])
-            # df.fillna(value=fillna_dict,inplace=True)
+
             df.fillna(value=fillna_dict,inplace=True)
             df['RatecodeID'] = df['RatecodeID'].fillna(0.0)
             df.to_csv('./temp/temp.csv', header=False, index=False)
@@ -137,14 +248,8 @@ if __name__=='__main__' :
             cursor = conn.cursor()
             with open('./temp/temp.csv', 'r') as csv_file :
                 cursor.copy_from(csv_file,table = '{t}_tripdata_{y}_{m:02d}'.format(t=taxi[t_id],y=y,m=m),sep=',',columns=[x.lower() for x in df.columns.to_list()])
-            # cursor.commit
+
             print('Done')
             quit(0)
 
         ce_id+=1
-
-    # for y in year :
-    #     for m in month :
-    #         for t in taxi :
-    #             df = pd.read_parquet(f'./data/{t}/{y}/{t}_tripdata_{y}-{m}.parquet',engine='fastparquet')
-    #             df.to_sql(f'{t}_tripdata_{y}-{m}', engine, chunksize=int(df.shape[0]/100), if_exists='fail')
