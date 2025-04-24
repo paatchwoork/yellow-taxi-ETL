@@ -1,18 +1,12 @@
-import psycopg2
 import os
 import pandas as pd
 
-def load_data (tablename, conn):
-    pq_file = f'./data/{tablename.replace('-','_')}.parquet'
-
-    if os.path.isfile(pq_file):
-        print(f"Loading {pq_file} in Pandas...")
-        df = pd.read_parquet(pq_file,engine='fastparquet')
-    else:
-        print(f"File {pq_file} doesn't exist.")
-        return None
-        # ce_id+=1
-        # continue
+def load_data (taxi, year, month, conn):
+    tablename = "{t}_tripdata_{y}_{m:02d}".format(t=taxi,y=year,m=month)
+    pq_file = './data/{t}/{y}/{t}_tripdata_{y}-{m:02d}.parquet'.format(t=taxi,y=year,m=month)
+            
+    print(f"Loading {pq_file} in Pandas...")
+    df = pd.read_parquet(pq_file,engine='fastparquet')
 
     print('Writing data to CSV')
     fillna_dict = {'airport_fee':0.0,

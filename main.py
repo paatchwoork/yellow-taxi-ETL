@@ -28,11 +28,13 @@ if __name__=='__main__' :
         'port' : 5432,
         'user' : 'admin',
         'password' : 'root',
-        'database' : 'postgres'}
+        'database' : 'nyc_trip_record'}
 
     # Create the engine
-    engine = create_engine(f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}")
+    engine = create_engine(f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}")#, echo=True)
  
+    metadata = MetaData()
+
     # Create the Base and the Taxi and Calendar Tables usinf the declarative base method
     class Base(DeclarativeBase):
         pass
@@ -56,8 +58,6 @@ if __name__=='__main__' :
     Calendar.__table__.drop(engine, checkfirst=True)
 
     Base.metadata.create_all(engine)
-
-    metadata = MetaData()
 
     # Connect to the database
     try :
@@ -95,40 +95,43 @@ if __name__=='__main__' :
             session.add(calendar_entry)
             session.flush()
 
-            tablename = "{t}_tripdata_{y}_{m:02d}".format(t=taxi[t],y=y,m=m)
-            
-            yellow = Table(
-                tablename,
-                metadata,
-                Column("TripID", Integer, primary_key=True),                 
-                Column("VendorID", Integer),
-                Column("tpep_pickup_datetime", DateTime),
-                Column("tpep_dropoff_datetime", DateTime),
-                Column("passenger_count", Float),
-                Column("trip_distance", Float),               
-                Column("RatecodeID", Float),
-                Column("store_and_fwd_flag", String),
-                Column("PULocationID", Integer),
-                Column("DOLocationID", Integer),
-                Column("payment_type", Integer),
-                Column("fare_amount", Float),
-                Column("extra", Float),
-                Column("mta_tax", Float),
-                Column("tip_amount", Float),
-                Column("tolls_amount", Float),
-                Column("improvement_surcharge", Float),
-                Column("total_amount", Float),
-                Column("congestion_surcharge", Float),
-                Column("airport_fee", Float),
-                Column("calendar_entry_id", Integer, ForeignKey(Calendar.calendar_entry_id))
-            )
-            print('here1')
-            yellow.drop(bind = engine, checkfirst=True)
-            print('here2')
-            yellow.metadata.create_all(engine)
-            print('here3')
-            load_data (tablename, conn)
-            print(ce_id)
+            # yellow.drop(bind = engine, checkfirst=True)
+            # yellow.metadata.create_all(engine)
+            pq_file = './data/{t}/{y}/{t}_tripdata_{y}-{m:02d}.parquet'.format(t=taxi[t],y=y,m=m)
+
+            # print(os. getcwd())
+            if os.path.isfile(pq_file):
+                tablename = "{t}_tripdata_{y}_{m:02d}".format(t=taxi[t],y=y,m=m)
+                
+                yellow = Table(
+                    tablename,
+                    metadata,
+                    Column("TripID", Integer, primary_key=True),                 
+                    Column("VendorID", Integer),
+                    Column("tpep_pickup_datetime", DateTime),
+                    Column("tpep_dropoff_datetime", DateTime),
+                    Column("passenger_count", Float),
+                    Column("trip_distance", Float),               
+                    Column("RatecodeID", Float),
+                    Column("store_and_fwd_flag", String),
+                    Column("PULocationID", Integer),
+                    Column("DOLocationID", Integer),
+                    Column("payment_type", Integer),
+                    Column("fare_amount", Float),
+                    Column("extra", Float),
+                    Column("mta_tax", Float),
+                    Column("tip_amount", Float),
+                    Column("tolls_amount", Float),
+                    Column("improvement_surcharge", Float),
+                    Column("total_amount", Float),
+                    Column("congestion_surcharge", Float),
+                    Column("airport_fee", Float),
+                    Column("calendar_entry_id", Integer, ForeignKey(Calendar.calendar_entry_id, ondelete = 'CASCADE'))
+                )
+                metadata.create_all(bind = engine, tables = [yellow])
+
+                load_data (taxi[t],y,m, conn)
+                
             ce_id += 1
 
         session.commit()
