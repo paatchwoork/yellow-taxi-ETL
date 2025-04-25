@@ -25,6 +25,16 @@ services:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD: root
     restart: unless-stopped
+  
+  kafka:
+    container_name: kafka
+    image: apache/kafka:latest
+    ports: 
+      - "9092:9092"
+    depends_on:
+      - postgres
+    restart:
+      unless-stopped
 
 volumes:
   postgres-data:
