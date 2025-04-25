@@ -1,10 +1,20 @@
 from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import Mapped
+from sqlalchemy import String
+from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import Session
+from sqlalchemy import MetaData
+from sqlalchemy import Table, Column, String, Integer, Float, DateTime, ForeignKey
+
 import psycopg2
 import pandas as pd
 import itertools
 import os
+import datetime
+from io import StringIO
 
-from src.load import exec_sql
+from src.load import load_data
 
 if __name__=='__main__' :
 
@@ -12,7 +22,7 @@ if __name__=='__main__' :
 
     year = [y for y in range(2009,2026)]
     month = [m for m in range(1,13)]
-    taxi = {1:'yellow', 2:'green'}#, 3:'fhv', 4:'fhvhv'}
+    taxi = {1:'yellow', 2:'green', 3:'for_hire_vehicle', 4:'high_volume_for_hire_vehicle'}
     config = {
         'host' : 'localhost',
         'port' : 5432,
@@ -20,11 +30,36 @@ if __name__=='__main__' :
         'password' : 'root',
         'database' : 'nyc_trip_record'}
 
-    engine = create_engine(f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}")
+    # Create the engine
+    engine = create_engine(f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}")#, echo=True)
  
-    if download :
+    metadata = MetaData()
+
+    # Create the Base and the Taxi and Calendar Tables usinf the declarative base method
+    class Base(DeclarativeBase):
         pass
 
+    class Taxi(Base):
+        __tablename__ = "taxi_list"
+
+        type_id:                Mapped[int] = mapped_column(primary_key=True)
+        taxi_type:              Mapped[str]
+
+    class Calendar(Base):
+        __tablename__ = "calendar"
+
+        calendar_entry_id:      Mapped[int] = mapped_column(primary_key=True)
+        taxi_type_id:           Mapped[int]
+        year:                   Mapped[int]
+        month:                  Mapped[int]
+    
+    # Reset everyhing
+    Taxi.__table__.drop(engine, checkfirst=True)
+    Calendar.__table__.drop(engine, checkfirst=True)
+
+    Base.metadata.create_all(engine)
+
+    # Connect to the database
     try :
         conn = psycopg2.connect(**config)
         conn.autocommit = True
@@ -34,117 +69,69 @@ if __name__=='__main__' :
     else :
         print('Successfully connected to database.')
 
-    sql = """DROP TABLE IF EXISTS taxi""" 
-    exec_sql(sql,**config)
+    if download :
+        pass
 
-    sql = """CREATE TABLE taxi(
-    type_id INT,
-    taxi_type TEXT);""" 
-    exec_sql(sql,**config)
+    with Session(engine) as session:
 
-    for t in taxi :
-        sql = f"""INSERT INTO taxi (type_id, taxi_type)
-        VALUES ({t}, '{taxi[t]}')"""
-        exec_sql(sql,**config)
+        # Fill the taxi table
+        for t in taxi:
+            t = Taxi(
+                type_id = t,
+                taxi_type = taxi[t]
+            )
+            session.add(t)
+            session.flush()
 
-    sql = """DROP TABLE IF EXISTS calendar;""" 
-    exec_sql(sql,**config)
+        ce_id = 1
+        for t,y,m in itertools.product(taxi,year,month): 
 
-    sql = """CREATE TABLE calendar(
-    calendar_entry_id INT,
-    taxi_type_id INT,
-    year INT,
-    month INT);""" 
-    exec_sql(sql,**config)
+            calendar_entry = Calendar(
+                calendar_entry_id = ce_id,
+                taxi_type_id = t,
+                year = y,
+                month = m
+            )
+            session.add(calendar_entry)
+            session.flush()
 
-    ce_id = 1
-    for t_id,y,m in itertools.product(taxi,year,month) :
-        # Create entry in the calendar table
-        sql = f"""INSERT INTO calendar (calendar_entry_id,taxi_type_id, year, month)
-        VALUES ({ce_id}, {t_id}, {y}, {m})"""
-        exec_sql(sql,**config)
+            # yellow.drop(bind = engine, checkfirst=True)
+            # yellow.metadata.create_all(engine)
+            pq_file = './data/{t}/{y}/{t}_tripdata_{y}-{m:02d}.parquet'.format(t=taxi[t],y=y,m=m)
 
-        pq_file = './data/{t}/{y}/{t}_tripdata_{y}-{m:02d}.parquet'.format(t=taxi[t_id],y=y,m=m)
-        # print(pq_file)
-        if os.path.isfile(pq_file) :
-            print(f'Loading {pq_file} into pandas...')
-            df = pd.read_parquet(pq_file,engine='fastparquet')
-            df = df.assign(calendar_entry_id = ce_id) 
-            # print(df.columns.to_list())
-            
-            # print(df['calendar_entry_id'])
-            # print('Creating CSV file...')
-            # df.to_csv('./temp/temp.csv', header=False, index=False) 
-            # print('Bulk inserting into the database...')
-
-            sql = """DROP TABLE IF EXISTS {t}_tripdata_{y}_{m:02d};""" .format(t=taxi[t_id],y=y,m=m)
-            exec_sql(sql,**config)
-    
-            sql = """CREATE TABLE {t}_tripdata_{y}_{m:02d} 
-            (VendorID INT,
-            tpep_pickup_datetime TIMESTAMP,
-            tpep_dropoff_datetime TIMESTAMP,
-            passenger_count FLOAT,
-            trip_distance FLOAT,
-            RatecodeID FLOAT,
-            store_and_fwd_flag CHAR(1),
-            PULocationID INT,
-            DOLocationID INT,
-            payment_type INT,
-            fare_amount FLOAT,
-            extra FLOAT,
-            mta_tax FLOAT,
-            tip_amount FLOAT,
-            tolls_amount FLOAT,
-            improvement_surcharge FLOAT,
-            total_amount FLOAT,
-            congestion_surcharge FLOAT,
-            airport_fee FLOAT,
-            calendar_entry_id INT)""".format(t=taxi[t_id],y=y,m=m)
-            exec_sql(sql,**config)
-
-            # WITH LINES
-            # if os.path.exists("./temp/temp.csv"):
-            #     os.remove("./temp/temp.csv")
-            # cursor = conn.cursor()
-            # for col in df.columns.to_list():
-            #     print(f'Adding {col} to the CSV...')
+            # print(os. getcwd())
+            if os.path.isfile(pq_file):
+                tablename = "{t}_tripdata_{y}_{m:02d}".format(t=taxi[t],y=y,m=m)
                 
-            #     df[col].to_csv('./temp/temp.csv', header=False, index=False, lineterminator=',', mode='a')
-            #     with open('./temp/temp.csv', 'a') as csv_file :
-            #         csv_file.write('\n')
+                yellow = Table(
+                    tablename,
+                    metadata,
+                    Column("TripID", Integer, primary_key=True),                 
+                    Column("VendorID", Integer),
+                    Column("tpep_pickup_datetime", DateTime),
+                    Column("tpep_dropoff_datetime", DateTime),
+                    Column("passenger_count", Float),
+                    Column("trip_distance", Float),               
+                    Column("RatecodeID", Float),
+                    Column("store_and_fwd_flag", String),
+                    Column("PULocationID", Integer),
+                    Column("DOLocationID", Integer),
+                    Column("payment_type", Integer),
+                    Column("fare_amount", Float),
+                    Column("extra", Float),
+                    Column("mta_tax", Float),
+                    Column("tip_amount", Float),
+                    Column("tolls_amount", Float),
+                    Column("improvement_surcharge", Float),
+                    Column("total_amount", Float),
+                    Column("congestion_surcharge", Float),
+                    Column("airport_fee", Float),
+                    Column("calendar_entry_id", Integer, ForeignKey(Calendar.calendar_entry_id, ondelete = 'CASCADE'))
+                )
+                metadata.create_all(bind = engine, tables = [yellow])
 
-            # print('Copying the CSV to the database')
-            # with open('./temp/temp.csv', 'r') as csv_file :
-            #     cursor.copy_from(csv_file,table = '{t}_tripdata_{y}_{m:02d}'.format(t=taxi[t_id],y=y,m=m),sep=',',columns=[x.lower() for x in df.columns.to_list()])
-            # quit(0)
+                load_data (taxi[t],y,m, conn)
+                
+            ce_id += 1
 
-            #WITH COLUMNS
-            print('Writing data to CSV')
-            fillna_dict = {'airport_fee':0.0,
-                           'passenger_count':0,
-                           'store_and_fwd_flag':'O',
-                           'ratecodeid':0.0,
-                           'congestion_surcharge':0.0}
-            # print(df.fillna(value=fillna_dict).loc[[6339568]].RatecodeID)
-            # quit(0)
-            # df = df.drop([6339568])
-            # df.fillna(value=fillna_dict,inplace=True)
-            df.fillna(value=fillna_dict,inplace=True)
-            df['RatecodeID'] = df['RatecodeID'].fillna(0.0)
-            df.to_csv('./temp/temp.csv', header=False, index=False)
-            print('Writing CSV to database')
-            cursor = conn.cursor()
-            with open('./temp/temp.csv', 'r') as csv_file :
-                cursor.copy_from(csv_file,table = '{t}_tripdata_{y}_{m:02d}'.format(t=taxi[t_id],y=y,m=m),sep=',',columns=[x.lower() for x in df.columns.to_list()])
-            # cursor.commit
-            print('Done')
-            quit(0)
-
-        ce_id+=1
-
-    # for y in year :
-    #     for m in month :
-    #         for t in taxi :
-    #             df = pd.read_parquet(f'./data/{t}/{y}/{t}_tripdata_{y}-{m}.parquet',engine='fastparquet')
-    #             df.to_sql(f'{t}_tripdata_{y}-{m}', engine, chunksize=int(df.shape[0]/100), if_exists='fail')
+        session.commit()

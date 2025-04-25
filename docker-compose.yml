@@ -9,10 +9,9 @@ services:
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: root
-      POSTGRES_DB: test_db
+      POSTGRES_DB: postgres
     volumes:
       - postgres-data:/var/lib/pgsql/data
-      - workdata:/home/paatchwoork/Documents/projects/yellow-taxi-ETL/temp
     restart: unless-stopped
 
   pgadmin:
@@ -29,4 +28,3 @@ services:
 
 volumes:
   postgres-data:
-  workdata:
